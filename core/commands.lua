@@ -58,10 +58,20 @@ local breakdownBuf = {}
 -- as a second value under SuperWoW. pcall-wrapped for the same reason -- without SuperWoW,
 -- UnitExists returns only one value, and the second read must not error, it must just come back
 -- nil, which this function then reads (correctly) as "no known current target".
+-- Zero-allocation target GUID lookup: SuperWoW (UnitExists 2nd return) -> Nampower (GetUnitGUID)
+-- -> ClassicAPI (UnitGUID). Avoids pcall(function() ... end) allocation on every damage hit.
 local function currentTargetGuid()
-    local g
-    pcall(function() local _, gg = UnitExists("target"); g = gg end)
-    return g
+    if SUPERWOW_VERSION ~= nil and UnitExists then
+        local _, gg = UnitExists("target")
+        if gg then return gg end
+    end
+    if type(GetUnitGUID) == "function" then
+        return GetUnitGUID("target")
+    end
+    if type(UnitGUID) == "function" then
+        return UnitGUID("target")
+    end
+    return nil
 end
 -- Bumped whenever the detected source set changes; a fight remembers the epoch it began in, so a
 -- gear swap mid-fight becomes visible as a mismatch (watchdog I4) instead of quietly mixing two
@@ -1034,8 +1044,14 @@ local function status()
         print_(string.format("mitigation seen: %d blocked, %d absorbed, %d resisted of %d gross"
             .." (damageBase=%s)", b, a, r, g, VampifyConst.FORMULA.damageBase))
     end
+    local hasNp, npVer = VampifyDamage.hasNampower and VampifyDamage.hasNampower()
+    if hasNp then
+        print_("nampower: v" .. (npVer or "detected"))
+    else
+        print_("|cffff6060nampower: NOT detected -- outgoing damage events require nampower.|r")
+    end
     if not VampifyDamage.damageSeen() then
-        print_("no own-damage events received yet -- nampower may be absent.")
+        print_("no own-damage events received yet.")
     end
 
     local flag = VampifyDisplay.boundFlag(VampifyConst.FORMULA.channels, VampifyDamage.aoeAvailable())
@@ -1164,7 +1180,7 @@ SlashCmdList["VAMPIFY"] = function(msg)
                 lastHp, lastAt, lastExpected = nil, nil, nil   -- no window straddles the switch
                 print_("watch: HP reconciliation " .. arg .. ".")
             else
-                print_("watch: could not switch -- SuperWoW is needed for the player GUID.")
+                print_("watch: could not switch -- neither SuperWoW nor Nampower returned a player GUID.")
             end
         else
             local b = balance

@@ -334,11 +334,20 @@ end
 -- the total may read HIGH -- the one direction in which this addon can overstate the number.
 function G.aoeAvailable() return goSeen end
 
--- True once ANY own-damage event has arrived. nampower is a client module, not an addon, so there
--- is nothing to query with IsAddOnLoaded -- its absence can only be observed as silence. Silence
--- while the player is visibly fighting means the addon is inert, and spec 7 requires that it say
--- so rather than display a confident zero.
+-- True once ANY own-damage event has arrived.
 function G.damageSeen() return damageSeen end
+
+-- Direct Nampower detection (v4.6+ exposes GetNampowerVersion).
+function G.hasNampower()
+    if type(GetNampowerVersion) == "function" then
+        local ok, maj, min, pat = pcall(GetNampowerVersion)
+        if ok and maj then
+            return true, tostring(maj) .. "." .. tostring(min or 0) .. "." .. tostring(pat or 0)
+        end
+        return true, nil
+    end
+    return false, nil
+end
 
 -- Mitigation totals for settling net-vs-gross (spec 4.3.2) offline.
 function G.mitigation() return mitGross, mitBlocked, mitAbsorbed, mitResisted end

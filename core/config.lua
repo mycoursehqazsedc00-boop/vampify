@@ -15,7 +15,7 @@ C.DB_VERSION = 4
 C.V1_POS = { point = "CENTER", x = 0, y = -150 }
 
 C.DEFAULTS = {
-    dbVersion = 3,
+    dbVersion = C.DB_VERSION,
     pos       = { point = "CENTER", x = 0, y = 200 },
     locked    = false,
     minimap   = true,
@@ -69,7 +69,7 @@ C.DEFAULTS = {
 }
 
 C.CHAR_DEFAULTS = {
-    dbVersion   = 2,
+    dbVersion   = C.DB_VERSION,
     enabled     = true,
     sessionHeal = 0,
     manual      = {},      -- manual source overrides, /vf source add <percent>
@@ -150,10 +150,16 @@ local function copy(t)
 end
 
 function C.migrate(db, defaults, currentVersion)
-    if type(db) ~= "table" then return copy(defaults) end
+    if type(db) ~= "table" then
+        local out = copy(defaults)
+        out.dbVersion = currentVersion
+        return out
+    end
     local v = db.dbVersion
     if type(v) ~= "number" or v > currentVersion then
-        return copy(defaults)        -- unknown or from the future: reset, do not guess
+        local out = copy(defaults)        -- unknown or from the future: reset, do not guess
+        out.dbVersion = currentVersion
+        return out
     end
     -- Known older versions step forward here.
     if v < 2 then

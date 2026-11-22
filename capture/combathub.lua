@@ -62,7 +62,9 @@ CombatHub:OnPostLogin(function()
             end
 
             -- Check if incoming was already activated during load (e.g. saved /vf perhit)
-            local wasActive = (inf.IsEventRegistered and inf:IsEventRegistered("SPELL_DAMAGE_EVENT_OTHER")) and true or false
+            local wasActive = (inc.isOn and inc.isOn())
+                or (inf.IsEventRegistered and inf:IsEventRegistered("SPELL_DAMAGE_EVENT_OTHER"))
+                and true or false
 
             -- Detach any already-registered incoming combat events
             local i

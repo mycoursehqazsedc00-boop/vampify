@@ -270,11 +270,12 @@ local function findAttackIndex()
     local bookType = BOOKTYPE_SPELL or "spell"   -- literal fallback matches SpellBookFrame.lua's own
                                                   -- BOOKTYPE_SPELL = "spell" in case load order ever
                                                   -- left the global unset when this runs
+    local attackName = ATTACK or "Attack"
     local i = 1
     while true do
         local ok, name = pcall(GetSpellName, i, bookType)
         if not ok or not name then break end
-        if name == "Attack" then return i end
+        if name == attackName or name == "Attack" then return i end
         i = i + 1
     end
     return nil
@@ -304,6 +305,10 @@ function C.meleeIcon()
         local ok, tex = pcall(GetSpellTexture, C._attackIndex, bookType)
         if ok and type(tex) == "string" and tex ~= "" then return tex end
     end
+    if GetInventoryItemTexture then
+        local ok, tex = pcall(GetInventoryItemTexture, "player", 16)
+        if ok and type(tex) == "string" and tex ~= "" then return tex end
+    end
     return C.MELEE_ICON
 end
 
@@ -331,6 +336,15 @@ function C.spellIcon(id)
         -- error into the hot damage/tooltip path.
         local ok, _, _, tex = pcall(SpellInfo, id)
         if ok and type(tex) == "string" and tex ~= "" then icon = tex end
+    end
+
+    -- Fallback: Nampower v4.6+ spellIconID -> GetSpellIconTexture when SuperWoW is absent.
+    if not icon and GetSpellRecField and GetSpellIconTexture then
+        local ok1, iconId = pcall(GetSpellRecField, id, "spellIconID")
+        if ok1 and type(iconId) == "number" and iconId > 0 then
+            local ok2, tex = pcall(GetSpellIconTexture, iconId)
+            if ok2 and type(tex) == "string" and tex ~= "" then icon = tex end
+        end
     end
 
     -- Cache a MISS too (as `false`, distinguishable from "not yet looked up" = nil), so an id that

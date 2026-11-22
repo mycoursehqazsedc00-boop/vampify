@@ -122,12 +122,22 @@ local playerGuid = nil
 -- all), so I.isOn() keeps its old contract unchanged.
 local watchWanted, perhitWanted, on = false, false, false
 
--- SuperWoW returns the GUID as the second value of UnitExists. Wrapped: without SuperWoW there is
--- no GUID, and then this whole subsystem has nothing to filter on and stays off.
+-- Resolve the player's GUID via SuperWoW (UnitExists 2nd return), Nampower (GetUnitGUID),
+-- or ClassicAPI (UnitGUID). Without any of them, this subsystem has nothing to filter on.
 local function readGuid()
-    local g
-    pcall(function() local _, gg = UnitExists("player"); g = gg end)
-    return g
+    if SUPERWOW_VERSION ~= nil and UnitExists then
+        local _, gg = UnitExists("player")
+        if gg then return gg end
+    end
+    if type(GetUnitGUID) == "function" then
+        local g = GetUnitGUID("player")
+        if g then return g end
+    end
+    if type(UnitGUID) == "function" then
+        local g = UnitGUID("player")
+        if g then return g end
+    end
+    return nil
 end
 
 function I.playerGuid() return playerGuid end
