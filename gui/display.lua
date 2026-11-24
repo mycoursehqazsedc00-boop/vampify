@@ -1542,11 +1542,13 @@ if CreateFrame then
     -- parent's size, so any always-available frame works equally well here.
     local healProbe = W.MakeText(UIParent, 9, W.COLORS.goldHi, "OVERLAY")
     healProbe:SetText(V.formatAmount(9999900000))   -- "9999.9M" -- a deliberately absurd ceiling
-    local HEAL_TEXT_W_EST = healProbe:GetStringWidth() or 40
+    local healProbeW = healProbe:GetStringWidth()
+    local HEAL_TEXT_W_EST = (healProbeW and healProbeW > 0) and healProbeW or 40
     healProbe:Hide()
     local hpsProbe = W.MakeText(UIParent, 9, W.COLORS.ink, "OVERLAY")
     hpsProbe:SetText(V.formatHpsSegment({ hps = 99999.9 }))   -- "99999.9 HPS"
-    local HPS_TEXT_W_EST = hpsProbe:GetStringWidth() or 36
+    local hpsProbeW = hpsProbe:GetStringWidth()
+    local HPS_TEXT_W_EST = (hpsProbeW and hpsProbeW > 0) and hpsProbeW or 36
     hpsProbe:Hide()
     local FIXED_RESERVE_EST = FIXED_RESERVE_STATIC + HEAL_TEXT_W_EST + HPS_TEXT_W_EST
     local BAR_MIN_W     = FIXED_RESERVE_EST + PILL_MIN_W
@@ -1763,6 +1765,15 @@ if CreateFrame then
         child:SetScript("OnDragStop", endBarDrag)
     end
 
+    -- Right-click cycles breakdown scope (session -> lifetime -> last -> session) from anywhere on
+    -- the bar, including mouse-enabled child hitboxes (pill and segment tooltip overlays).
+    local function onBarMouseUp()
+        if arg1 == "RightButton" then
+            V.tipScope = V.nextScope(V.normalizeScope(V.tipScope))
+            V.showTooltip()
+        end
+    end
+
     local function attachSegmentTooltip(name, parent, fs, anchor, buildFn)
         local h = CreateFrame("Frame", name, parent)
         h:SetAllPoints(fs)
@@ -1773,6 +1784,7 @@ if CreateFrame then
             GameTooltip:Show()
         end)
         h:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        h:SetScript("OnMouseUp", onBarMouseUp)
         -- A hitbox exists to show a tooltip; it must not also cost the bar a grab point. Tooltip
         -- and drag coexist on one frame without interfering (OnEnter/OnLeave and
         -- OnDragStart/OnDragStop are independent script slots).
@@ -1883,6 +1895,7 @@ if CreateFrame then
         -- The pill is mouse-enabled as the sole hover-trigger for the breakdown panel, which also
         -- made the widest part of the bar undraggable until now.
         makeBarDraggable(frame.vfPill)
+        frame.vfPill:SetScript("OnMouseUp", onBarMouseUp)
 
         -- Sole hover-trigger for the breakdown panel now (hover-chain level 2) -- 2026-08-24,
         -- in-game report: the detail list should only open when the mouse is over this "pill",
@@ -2113,12 +2126,7 @@ if CreateFrame then
         -- scope trap, caught in-game once already. Safe to call even if the panel is not currently
         -- open (a right-click while only, say, the heal number is hovered) -- V.showTooltip lazily
         -- builds/shows on its own regardless of the pill's own hover state.
-        frame:SetScript("OnMouseUp", function()
-            if arg1 == "RightButton" then
-                V.tipScope = V.nextScope(V.normalizeScope(V.tipScope))
-                V.showTooltip()
-            end
-        end)
+        frame:SetScript("OnMouseUp", onBarMouseUp)
 
         -- Drives the hover chain's shared countdown (see the Chain block above) -- a single field
         -- read on every frame the countdown is not running, which is the overwhelming majority of
@@ -2194,6 +2202,7 @@ if CreateFrame then
         frame:SetScript("OnSizeChanged", function()
             if not this.vfPill then return end
             local pillW = recomputePillW(this)
+            this.vfLastPillW = pillW
             layoutPill(this.vfPill, pillW, this.vfLastStPct or 0, this.vfLastAoePct or 0,
                 this.vfLastRedLabel, this.vfLastBlueLabel)
         end)
@@ -2552,6 +2561,7 @@ if CreateFrame then
             -- header comment). Without this, hovering the scope toggle could arm a close countdown
             -- for the whole panel while the cursor never left it.
             b:SetScript("OnEnter", function() V.chainEnter(Chain) end)
+            b:SetScript("OnLeave", function() V.chainLeave(Chain, 2) end)
             b:SetScript("OnClick", function()
                 V.tipScope = this.vfScope
                 V.showTooltip()
@@ -2613,7 +2623,10 @@ if CreateFrame then
             end
             GameTooltip:Show()
         end)
-        tip.vfResetBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        tip.vfResetBtn:SetScript("OnLeave", function()
+            V.chainLeave(Chain, 2)
+            GameTooltip:Hide()
+        end)
         tip.vfResetBtn:SetScript("OnClick", function()
             if this.vfDisabled then return end
             local scope = V.normalizeScope(V.tipScope)
@@ -3873,14 +3886,24 @@ if CreateFrame then
         end
         local showBadge = (splitOut and splitOut.total and splitOut.total > 0) and true or false
         if showBadge then
-            local redLabel  = V.formatAmount(splitOut.stHeal or 0)
-            local blueLabel = V.formatAmount(splitOut.aoeHeal or 0)
-            -- Snapshotted on `frame` so OnSizeChanged (the resize grip, live during a drag) can
-            -- re-run layoutPill at the CURRENT pill width without waiting for the next V.update
-            -- tick, using the last data this tick already computed.
-            frame.vfLastStPct, frame.vfLastAoePct = splitOut.stPct, splitOut.aoePct
-            frame.vfLastRedLabel, frame.vfLastBlueLabel = redLabel, blueLabel
-            layoutPill(frame.vfPill, pillW, splitOut.stPct, splitOut.aoePct, redLabel, blueLabel)
+            local stHeal  = splitOut.stHeal or 0
+            local aoeHeal = splitOut.aoeHeal or 0
+            local stPct   = splitOut.stPct
+            local aoePct  = splitOut.aoePct
+            if stHeal ~= frame.vfLastStHeal or aoeHeal ~= frame.vfLastAoeHeal
+               or stPct ~= frame.vfLastStPct or aoePct ~= frame.vfLastAoePct
+               or pillW ~= frame.vfLastPillW then
+                local redLabel  = V.formatAmount(stHeal)
+                local blueLabel = V.formatAmount(aoeHeal)
+                -- Snapshotted on `frame` so OnSizeChanged (the resize grip, live during a drag) can
+                -- re-run layoutPill at the CURRENT pill width without waiting for the next V.update
+                -- tick, using the last data this tick already computed.
+                frame.vfLastStHeal, frame.vfLastAoeHeal = stHeal, aoeHeal
+                frame.vfLastStPct, frame.vfLastAoePct = stPct, aoePct
+                frame.vfLastRedLabel, frame.vfLastBlueLabel = redLabel, blueLabel
+                frame.vfLastPillW = pillW
+                layoutPill(frame.vfPill, pillW, stPct, aoePct, redLabel, blueLabel)
+            end
         end
         -- ---- gear%-on-bar segment (2026-08-25 option) -------------------------------------------
         -- Same figure V.formatSources already computes for other callers (the row-detail rate line,
@@ -3910,6 +3933,7 @@ if CreateFrame then
             -- "no visible stale frame" reasoning V.show()'s own forced-repaint comment gives.
             pillW = recomputePillW(frame)
             if showBadge then
+                frame.vfLastPillW = pillW
                 layoutPill(frame.vfPill, pillW, frame.vfLastStPct or 0, frame.vfLastAoePct or 0,
                     frame.vfLastRedLabel, frame.vfLastBlueLabel)
             end
@@ -3947,7 +3971,7 @@ if CreateFrame then
         -- on the FontString itself and needs no help: that FontString was never hidden along with
         -- the bar (only `frame` was), so its rendered text was never stale to begin with. Same for
         -- vfLastPct's own text guard -- only its SHOWN/HIDDEN layout cache needs forcing here.
-        frame.vfLastHeal, frame.vfLastShowBadge, frame.vfLastShowPct = nil, nil, nil
+        frame.vfLastHeal, frame.vfLastShowBadge, frame.vfLastShowPct, frame.vfLastPillW = nil, nil, nil, nil
         -- The marker is hidden along with the bar, so an open finding has to be restored with it.
         if warnMsg and warnBtn then warnBtn:Show() end
         V.update()

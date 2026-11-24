@@ -293,23 +293,25 @@ if CreateFrame then
             -- Trust arg2 rather than the _SELF suffix, and never count a hit on ourselves.
             if caster and tgt and caster ~= tgt and amount > 0 then
                 damageSeen = true
-                local now = GetTime()
-                local isCrit = G.isCritSpell(arg6)
+                mitGross = mitGross + amount
                 -- Net via G.netSpell (above) -- honors VampifyConst.FORMULA.damageBase = "net"
                 -- (spec 4a) the same way the AUTO_ATTACK_SELF branch below already does. A hit
                 -- that partially resisted (Arcane school, e.g. Ancient Accord's proc, is a
                 -- measured case of this) must not credit its resisted portion as damage the
                 -- server paid Vampirism on.
                 local d = G.netSpell(amount, arg5)
-                -- Distinct-target proof only, cast or not -- see the section comment above. Fed
-                -- the NET amount: this is the figure the correction listener re-credits later,
-                -- and it must match what emit() below hands the model.
-                local isAoE = false
-                if spellId then
-                    isAoE = G.deriveAoE(spellId, tgt, d, isCrit, now)
+                if d > 0 then
+                    local now = GetTime()
+                    local isCrit = G.isCritSpell(arg6)
+                    -- Distinct-target proof only, cast or not -- see the section comment above. Fed
+                    -- the NET amount: this is the figure the correction listener re-credits later,
+                    -- and it must match what emit() below hands the model.
+                    local isAoE = false
+                    if spellId then
+                        isAoE = G.deriveAoE(spellId, tgt, d, isCrit, now)
+                    end
+                    emit(d, isAoE, tgt, spellId, isCrit)
                 end
-                mitGross = mitGross + amount
-                emit(d, isAoE, tgt, spellId, isCrit)
             end
         elseif event == "AUTO_ATTACK_SELF" then
             local amount, tgt, blocked, absorbed, resisted, attacker =
@@ -324,7 +326,9 @@ if CreateFrame then
                 if VampifyConst.FORMULA.damageBase == "net" then
                     d = G.netOf(amount, blocked, absorbed, resisted)
                 end
-                emit(d, false, tgt, nil, G.isCritMelee(arg4))
+                if d > 0 then
+                    emit(d, false, tgt, nil, G.isCritMelee(arg4))
+                end
             end
         end
     end)

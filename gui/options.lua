@@ -174,7 +174,7 @@ if CreateFrame then
 
         local flag = VampifyDisplay.boundFlag(VampifyConst.FORMULA.channels, VampifyDamage.aoeAvailable())
         if flag == "lower" or flag == "uncertain" then
-            table.insert(infoLines, "|cffe0c98aLower bound: DoT and PvP damage are unmeasured and excluded.|r")
+            table.insert(infoLines, "|cffe0c98aLower bound: PvP damage is unmeasured and excluded.|r")
         end
         if flag == "upper" or flag == "uncertain" then
             table.insert(infoLines, "|cffe0c98aUpper bound: no SPELL_GO seen, AoE damping not applied.|r")
@@ -227,33 +227,35 @@ if CreateFrame then
         if col then swatch:SetBackdropColor(col.r, col.g, col.b, 1) end
     end
 
-    -- Greys out the controls that are genuinely inert outside "Free anchor" mode: Blizzard mode
-    -- owns its own position and timing (Blizzard_CombatText), and bar mode derives its position
-    -- from VampifyDisplayFrame rather than the stored free position -- in both cases the slider/
-    -- Move/Reset controls below have nothing to act on. NOT the color swatch, which still applies
+    -- Greys out controls that are inert in the active SCT mode: Blizzard mode owns its own
+    -- position, font, rise, fade duration, and outline (Blizzard_CombatText); bar mode still uses
+    -- our own SCT renderer (so rise/font/duration/demo/outline remain active) and only derives its
+    -- anchor position from VampifyDisplayFrame (so Move/Reset are inert). The color swatch applies
     -- in all three modes.
     local function refreshEnabled()
         local cfg = db()
         local mode = cfg and cfg.sct and cfg.sct.mode
+        -- Active in both "own" (free anchor) and "bar" (anchored to bar); only "blizzard" uses
+        -- Blizzard_CombatText.
+        local ownSctEnabled = (mode ~= "blizzard")
         -- Active only in "own" -- nil (fresh/unmigrated profile) and any unrecognised value fall
         -- back to enabled too, matching gui/sct.lua's resolveAnchorMode's "unknown -> free" rule.
-        local posEnabled = (mode ~= "bar" and mode ~= "blizzard")
+        local freeAnchorEnabled = (mode ~= "bar" and mode ~= "blizzard")
 
-        if btnMove then W.SetButtonEnabled(btnMove, posEnabled) end
-        if btnPosReset then W.SetButtonEnabled(btnPosReset, posEnabled) end
-        if posLabel then W.SetTextColorG(posLabel, posEnabled and C.ink or C.faint) end
+        if btnMove then W.SetButtonEnabled(btnMove, freeAnchorEnabled) end
+        if btnPosReset then W.SetButtonEnabled(btnPosReset, freeAnchorEnabled) end
+        if posLabel then W.SetTextColorG(posLabel, freeAnchorEnabled and C.ink or C.faint) end
         -- The sliders shape THIS addon's own SCT only; Blizzard's owns its font and travel.
         -- NOT Enable()/Disable(): a Slider has neither in 1.12 (it threw in-game). See
         -- W.SetSliderEnabled, which follows Blizzard's own hide-the-thumb recipe.
-        W.SetSliderEnabled(sliderRise, posEnabled)
-        W.SetSliderEnabled(sliderFont, posEnabled)
+        W.SetSliderEnabled(sliderRise, ownSctEnabled)
+        W.SetSliderEnabled(sliderFont, ownSctEnabled)
         -- Fade duration is the same category as fontSize/rise above: it shapes OUR pooled
-        -- FontStrings only (gui/sct.lua's S.spawn reads sct.duration into s.dur), so it follows
-        -- the same posEnabled greying.
-        W.SetSliderEnabled(sliderDuration, posEnabled)
-        if btnDemo then W.SetButtonEnabled(btnDemo, posEnabled) end
+        -- FontStrings only (gui/sct.lua's S.spawn reads sct.duration into s.dur).
+        W.SetSliderEnabled(sliderDuration, ownSctEnabled)
+        if btnDemo then W.SetButtonEnabled(btnDemo, ownSctEnabled) end
         -- The outline shapes OUR numbers only; Blizzard's engine draws its own.
-        if btnOutline then W.SetButtonEnabled(btnOutline, posEnabled) end
+        if btnOutline then W.SetButtonEnabled(btnOutline, ownSctEnabled) end
     end
 
     -- Push stored values into the sliders without letting OnValueChanged write them straight back.
@@ -407,16 +409,20 @@ if CreateFrame then
             function(v)
                 local cfg = db()
                 if cfg then cfg.perhitEnabled = v end
-                if not VampifyPerHit then return end
-                if v then
-                    if not VampifyPerHit.isEnabled() then VampifyPerHit.enable() end
-                elseif VampifyPerHit.isEnabled() then
-                    VampifyPerHit.disable(UnitHealth and UnitHealth("player"))
+                if VampifyPerHit then
+                    if v then
+                        if not VampifyPerHit.isEnabled() then VampifyPerHit.enable() end
+                    elseif VampifyPerHit.isEnabled() then
+                        VampifyPerHit.disable(UnitHealth and UnitHealth("player"))
+                    end
+                end
+                if VampifyIncoming and VampifyIncoming.setPerHitWanted then
+                    VampifyIncoming.setPerHitWanted(v)
                 end
             end)
         place(cbPerHit, -26)
         W.AttachTooltip(cbPerHit, "Writes one line per own hit to imports\\vampify_perhit_*.txt"
-            .." for offline analysis (per-source Vampirism factor measurement). On by default.")
+            .." for offline analysis (per-source Vampirism factor measurement). Off by default.")
 
         local cbSct = CreateCheckbox(f, "Scrolling combat text",
             function() local cfg = db(); return cfg and cfg.sct and cfg.sct.enabled end,

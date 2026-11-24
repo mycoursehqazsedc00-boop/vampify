@@ -60,9 +60,13 @@ function C.installErrorCapture()
     C._errPrev = geterrorhandler and geterrorhandler() or nil
 
     seterrorhandler(function(msg)
-        local show, write = C.recordError(msg)
-        if write then writeErrors() end
-        if show and C._errPrev then C._errPrev(msg) end
+        if string.find(string.lower(tostring(msg or "")), "vampify", 1, true) then
+            local show, write = C.recordError(msg)
+            if write then writeErrors() end
+            if show and C._errPrev then C._errPrev(msg) end
+        elseif C._errPrev then
+            C._errPrev(msg)
+        end
     end)
 end
 

@@ -777,6 +777,9 @@ local function wireSession()
     local afterLogout = cfg.loggingOut
     cfg.loggingOut = nil
 
+    if not cfg.session.src then cfg.session.src = {} end
+    if not cfg.lifetime.src then cfg.lifetime.src = {} end
+
     if afterLogout then
         -- Genuine login: the session set starts over. Cleared IN PLACE, not by replacing the
         -- table with a new {} -- see A.resetSpells' comment for why that distinction matters here.
@@ -784,6 +787,7 @@ local function wireSession()
         for k in pairs(cfg.session.damage)   do cfg.session.damage[k]   = nil end
         for k in pairs(cfg.session.overheal) do cfg.session.overheal[k] = nil end
         for k in pairs(cfg.session.hits)     do cfg.session.hits[k]     = nil end
+        for k in pairs(cfg.session.src)      do cfg.session.src[k]      = nil end
         -- The ST/AoE split twins start over on the same criterion, for the same reason -- otherwise
         -- a genuine login would keep last session's AoE-only figures sitting above a freshly-zeroed
         -- session total, which A.spellSplit's defensive clamp would then have to paper over.
@@ -802,9 +806,11 @@ local function wireSession()
     VampifyState.spHeal, VampifyState.spDmg, VampifyState.spOver =
         cfg.session.heal, cfg.session.damage, cfg.session.overheal
     VampifyState.spHits = cfg.session.hits
+    VampifyState.spSrc  = cfg.session.src
     VampifyState.lfHeal, VampifyState.lfDmg, VampifyState.lfOver =
         cfg.lifetime.heal, cfg.lifetime.damage, cfg.lifetime.overheal
     VampifyState.lfHits = cfg.lifetime.hits
+    VampifyState.lfSrc  = cfg.lifetime.src
     -- Same aliasing for the ST/AoE split tables (core/aggregate.lua's A.recordSpell/A.spellSplit),
     -- same reasoning: every A.recordSpell call from here on is already a SavedVariables write.
     VampifyState.spHealAoe, VampifyState.spDmgAoe, VampifyState.spHitsAoe, VampifyState.spSplitSeen =
@@ -1056,7 +1062,7 @@ local function status()
 
     local flag = VampifyDisplay.boundFlag(VampifyConst.FORMULA.channels, VampifyDamage.aoeAvailable())
     if flag == "lower" or flag == "uncertain" then
-        print_("|cffffff00>|r the total is a LOWER bound: DoT and PvP damage are unmeasured and excluded.")
+        print_("|cffffff00>|r the total is a LOWER bound: PvP damage is unmeasured and excluded.")
     end
     if flag == "upper" or flag == "uncertain" then
         print_("|cffffff00<|r the total is an UPPER bound: no SPELL_GO seen, so AoE damping is not applied.")
@@ -1152,7 +1158,7 @@ local function help()
     print_("/vf exclude add <id>     -- stop a spell from triggering Vampirism, from now on")
     print_("/vf exclude remove <id> -- undo a runtime exclusion (built-ins cannot be removed)")
     print_("/vf exclude list         -- show excluded spells, built-in and runtime")
-    print_("/vf perhit on|off|status -- per-hit debug export, default ON, setting is saved")
+    print_("/vf perhit on|off|status -- per-hit debug export, default OFF, setting is saved")
     print_("/vf upgrade [pct]     -- how much of your healing is the floor, and whether one more"
            .." source or swapping your weakest one is worth more (default +1%)")
 end

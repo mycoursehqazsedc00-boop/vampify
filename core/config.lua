@@ -57,15 +57,10 @@ C.DEFAULTS = {
     showOverheal = true,
 
     -- Dev-only per-hit debug export (core/perhit.lua), toggled by /vf perhit on|off and the
-    -- "Per-hit debug export" checkbox in gui/options.lua. DEFAULT ON: the module itself still
-    -- defaults its in-memory state to disabled (core/perhit.lua's own comment), but the developer
-    -- explicitly overrode that for THIS addon -- it is meant to run continuously like a background
-    -- capture addon, not be armed by hand each session (follow-up change request, 2026-08-22). No dbVersion bump
-    -- needed: the defaults merge below fills it in recursively for an existing profile, same as
-    -- shown/showOverheal above -- and `true` for a MISSING key is exactly what a brand new
-    -- default-on preference should read as (fillDefaults only ever fills a true nil, never a
-    -- stored `false`, so a developer who explicitly turned it off keeps it off across reloads).
-    perhitEnabled = true,
+    -- "Per-hit debug export" checkbox in gui/options.lua. Default off so fresh profiles do not
+    -- allocate per-hit tables, write disk files, or keep VampifyIncoming (*_OTHER) subscribed
+    -- unless the user opts in.
+    perhitEnabled = false,
 }
 
 C.CHAR_DEFAULTS = {
@@ -121,10 +116,10 @@ C.CHAR_DEFAULTS = {
     -- data already collected under the first definition has to be discarded rather than silently
     -- reinterpreted under the second -- C.migrate's v<4 step does exactly that, leaving heal/damage/
     -- overheal/hits (the grand totals) untouched.
-    session     = { heal = {}, damage = {}, overheal = {}, hits = {},
+    session     = { heal = {}, damage = {}, overheal = {}, hits = {}, src = {},
                     healAoe = {}, damageAoe = {}, hitsAoe = {}, splitSeen = {},
                     hist = { n = {}, a = {}, nOverN = 0, nOverSum = 0, aOverN = 0, aOverSum = 0 } },
-    lifetime    = { heal = {}, damage = {}, overheal = {}, hits = {},
+    lifetime    = { heal = {}, damage = {}, overheal = {}, hits = {}, src = {},
                     healAoe = {}, damageAoe = {}, hitsAoe = {}, splitSeen = {},
                     hist = { n = {}, a = {}, nOverN = 0, nOverSum = 0, aOverN = 0, aOverSum = 0 } },
 }
