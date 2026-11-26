@@ -104,6 +104,9 @@ local function print_(msg)
     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffVampify|r "..msg) end
 end
 
+-- Lightweight live debug trace (/vf trace). Session-only, zero cost when off.
+local traceOn = false
+
 -- ---- visibility --------------------------------------------------------------------------------
 --
 -- Three different questions, and conflating them is what made a hide unstick:
@@ -314,6 +317,7 @@ local function beginFight(now)
     -- restarts here -- so the counter it is compared against has to restart with it.
     emittedFight = 0
     aoeCorrectedShown = 0
+    for k in pairs(creditedAt) do creditedAt[k] = nil end
     fightEpoch = sourceEpoch
 end
 
@@ -557,6 +561,13 @@ if VampifyDamage.onDamage then
         local curTarget = currentTargetGuid()
         if curTarget and targetGuid and targetGuid == curTarget then notOnTarget = false end
         VampifyAggregate.recordSpell(VampifyState, spellId, healFloat, amount, healFloat - effInc, notOnTarget)
+        if traceOn then
+            local sName = VampifyConst.spellName(spellId or VampifyAggregate.MELEE)
+            local idTag = spellId and ("#" .. tostring(spellId)) or "melee"
+            print_(string.format("|cff88ccff[trace]|r %s (%s) dmg=%d aoe=%d offTgt=%d heal=%d oh=%d",
+                sName, idTag, math.floor(amount), isAoE and 1 or 0, notOnTarget and 1 or 0,
+                math.floor(healFloat), math.floor(healFloat - effInc)))
+        end
         -- The hit's SIZE, into both scopes' distributions -- one table-index increment each, no
         -- allocation (core/histogram.lua). Deliberately fed the same `amount` and `isAoE` the model
         -- was given a few lines up, and from BELOW every drop above (no sources, excluded spell),
@@ -730,6 +741,10 @@ if VampifyDamage.onAoECorrection then
         -- adjusted by the same code that filled them. inc is 0: nothing new is shown for this.
         VampifyAggregate.record(VampifyState, 0, delta, 0, nil)
         VampifyAggregate.recordSpell(VampifyState, spellId, delta, 0, delta * share)
+        if traceOn then
+            print_(string.format("|cff88ccff[trace]|r AoE-corr %s (#%s) delta=%d",
+                VampifyConst.spellName(spellId), tostring(spellId), math.floor(delta)))
+        end
     end)
 end
 
@@ -1141,6 +1156,105 @@ local function upgradeReport(p)
     end
 end
 
+local reportRowBuf, reportMergeBuf = {}, {}
+
+local function sendReportLine(channel, line)
+    if channel == "SELF" or not SendChatMessage then
+        print_(line)
+    else
+        SendChatMessage(line, channel)
+    end
+end
+
+-- Public helper so both /vf report and the breakdown panel's Report button share one path.
+function VampifyReport(channelArg, scopeArg)
+    local ch = string.lower(channelArg or "auto")
+    local sc = string.lower(scopeArg or "")
+    -- Allow /vf report session|last|lifetime (scope as first arg -> print locally)
+    if ch == "session" or ch == "last" or ch == "lifetime" then
+        sc = ch
+        ch = "self"
+    end
+    if sc == "" then
+        sc = (VampifyDisplay and VampifyDisplay.normalizeScope and VampifyDisplay.normalizeScope(VampifyDisplay.tipScope))
+            or "session"
+    end
+    if sc ~= "session" and sc ~= "last" and sc ~= "lifetime" then sc = "session" end
+
+    local targetChat = "SELF"
+    if ch == "auto" then
+        if GetNumRaidMembers and GetNumRaidMembers() > 0 then
+            targetChat = "RAID"
+        elseif GetNumPartyMembers and GetNumPartyMembers() > 0 then
+            targetChat = "PARTY"
+        else
+            targetChat = "SELF"
+        end
+    elseif ch == "say" or ch == "s" then
+        targetChat = "SAY"
+    elseif ch == "party" or ch == "p" then
+        if GetNumPartyMembers and GetNumPartyMembers() > 0 then
+            targetChat = "PARTY"
+        else
+            print_("report: not in a party -- printing locally instead.")
+        end
+    elseif ch == "raid" or ch == "r" then
+        if GetNumRaidMembers and GetNumRaidMembers() > 0 then
+            targetChat = "RAID"
+        else
+            print_("report: not in a raid -- printing locally instead.")
+        end
+    elseif ch == "guild" or ch == "g" then
+        if IsInGuild and IsInGuild() then
+            targetChat = "GUILD"
+        else
+            print_("report: not in a guild -- printing locally instead.")
+        end
+    end
+
+    local rows = VampifyAggregate.spellBreakdown(VampifyState, reportRowBuf, sc)
+    local list = rows
+    if VampifyDisplay and VampifyDisplay.mergeByName then
+        list = VampifyDisplay.mergeByName(rows, reportMergeBuf)
+    end
+    local n = table.getn(list)
+    local totalHeal, totalDmg = 0, 0
+    for i = 1, n do
+        totalHeal = totalHeal + (list[i].heal or 0)
+        totalDmg  = totalDmg  + (list[i].damage or 0)
+    end
+    if totalHeal <= 0 then
+        print_("report (" .. sc .. "): no Vampirism healing recorded yet.")
+        return
+    end
+
+    local scopeLabel = (sc == "last" and "Last Fight") or (sc == "lifetime" and "Lifetime") or "Session"
+    local effPct = (totalDmg > 0) and (totalHeal / totalDmg * 100) or 0
+    local hpsSuffix = ""
+    if sc == "last" then
+        local fight = VampifyAggregate.fight(VampifyState)
+        if fight and fight.hps and fight.hps > 0 then
+            hpsSuffix = string.format(", %.1f HPS", fight.hps)
+        end
+    end
+    local gearSuffix = (nSources > 0) and string.format(", %.0f%% gear", sumPercent * 100) or ""
+    sendReportLine(targetChat, string.format("Vampify (%s): %d HP healed (%.2f%% of %d dmg%s%s)",
+        scopeLabel, math.floor(totalHeal), effPct, math.floor(totalDmg), hpsSuffix, gearSuffix))
+
+    local topN = n
+    if topN > 3 then topN = 3 end
+    if topN > 0 then
+        local parts = {}
+        for i = 1, topN do
+            local r = list[i]
+            local name = r.name or VampifyConst.spellName(r.spell)
+            local share = (totalHeal > 0) and ((r.heal or 0) / totalHeal * 100) or 0
+            table.insert(parts, string.format("%d. %s %d (%.0f%%)", i, name, math.floor(r.heal or 0), share))
+        end
+        sendReportLine(targetChat, "Top: " .. table.concat(parts, ", "))
+    end
+end
+
 local function help()
     print_("/vf status            -- sources and totals")
     print_("/vf reset [session|lifetime|last|both]")
@@ -1159,6 +1273,9 @@ local function help()
     print_("/vf exclude remove <id> -- undo a runtime exclusion (built-ins cannot be removed)")
     print_("/vf exclude list         -- show excluded spells, built-in and runtime")
     print_("/vf perhit on|off|status -- per-hit debug export, default OFF, setting is saved")
+    print_("/vf trace [on|off]       -- live per-hit debug trace in chat (no disk writes)")
+    print_("/vf report [say|party|raid|guild|self] [session|last|lifetime]")
+    print_("                         -- share Vampirism healing summary to chat")
     print_("/vf upgrade [pct]     -- how much of your healing is the floor, and whether one more"
            .." source or swapping your weakest one is worth more (default +1%)")
 end
@@ -1396,6 +1513,19 @@ SlashCmdList["VAMPIFY"] = function(msg)
                    .."%d chunk(s) flushed this session",
                    st.enabled and "on" or "off", st.totalHits, st.buffered, st.chunk))
         end
+    elseif cmd == "trace" then
+        local _, _, arg = string.find(rest, "^(%a*)")
+        if arg == "on" then
+            traceOn = true
+        elseif arg == "off" then
+            traceOn = false
+        else
+            traceOn = not traceOn
+        end
+        print_(traceOn and "trace: ON -- printing live hit calculations to chat." or "trace: OFF.")
+    elseif cmd == "report" then
+        local _, _, a1, a2 = string.find(rest, "^(%a*)%s*(%a*)")
+        VampifyReport(a1 ~= "" and a1 or "auto", a2 ~= "" and a2 or nil)
     else
         help()
     end

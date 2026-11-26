@@ -95,6 +95,7 @@ function V.snapshotShares(shares, n, out)
     local i
     for i = 1, n do out[i] = shares[i] or 0 end
     for i = n + 1, table.getn(out) do out[i] = nil end
+    table.setn(out, n)
     return out
 end
 
@@ -473,6 +474,7 @@ function V.shareOfMax(rows, out)
         end
     end
     for i = n + 1, table.getn(out) do out[i] = nil end
+    table.setn(out, n)
     return out
 end
 
@@ -2638,6 +2640,40 @@ if CreateFrame then
             end
         end)
 
+        -- Report button: shares the active scope's Vampirism summary to party/raid (or self on right-click).
+        tip.vfReportBtn = CreateFrame("Button", "VampifyBarReportBtn", tip)
+        tip.vfReportBtn:SetWidth(46)
+        tip.vfReportBtn:SetHeight(11)
+        tip.vfReportBtn:SetPoint("RIGHT", tip.vfResetBtn, "LEFT", -8, 0)
+        tip.vfReportBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        tip.vfReportBtn.vfText = W.MakeText(tip.vfReportBtn, 9, W.COLORS.dim, "OVERLAY")
+        tip.vfReportBtn.vfText:SetPoint("RIGHT", tip.vfReportBtn, "RIGHT", 0, 0)
+        tip.vfReportBtn.vfText:SetJustifyH("RIGHT")
+        tip.vfReportBtn.vfText:SetText("Report")
+        tip.vfReportBtn:SetScript("OnEnter", function()
+            V.chainEnter(Chain)
+            this.vfText:SetTextColor(W.COLORS.goldHi.r, W.COLORS.goldHi.g, W.COLORS.goldHi.b)
+            GameTooltip:SetOwner(this, "ANCHOR_LEFT")
+            GameTooltip:AddLine("Report " .. V.normalizeScope(V.tipScope))
+            GameTooltip:AddLine("Left-click: send summary to raid/party (or local if solo).", 0.8, 0.8, 0.8, 1)
+            GameTooltip:AddLine("Right-click: print summary locally.", 0.8, 0.8, 0.8, 1)
+            GameTooltip:Show()
+        end)
+        tip.vfReportBtn:SetScript("OnLeave", function()
+            V.chainLeave(Chain, 2)
+            this.vfText:SetTextColor(W.COLORS.dim.r, W.COLORS.dim.g, W.COLORS.dim.b)
+            GameTooltip:Hide()
+        end)
+        tip.vfReportBtn:SetScript("OnClick", function()
+            if not VampifyReport then return end
+            local scope = V.normalizeScope(V.tipScope)
+            if arg1 == "RightButton" then
+                VampifyReport("self", scope)
+            else
+                VampifyReport("auto", scope)
+            end
+        end)
+
         -- ---- ST/AoE split row (mockup redesign, 2026-08-24, revised same day per in-game
         -- feedback) -- ONE continuous two-color bar spanning the full panel width, ST (blue) up to
         -- the share boundary, AoE (orange) from there to the end -- one bar, two colors, no gap
@@ -3061,6 +3097,44 @@ if CreateFrame then
             if hoveredRowIndex == this.vfRowIndex then hoveredRowIndex = nil end
             V.chainLeave(Chain, 3)
         end)
+        h:EnableMouse(true)
+        h:SetScript("OnMouseUp", function()
+            local entry = rowEntryMap[this.vfRowIndex]
+            if not entry or entry.isOther or not entry.ids then return end
+            if arg1 == "LeftButton" and IsShiftKeyDown and IsShiftKeyDown() then
+                local idList = {}
+                for idx = 1, table.getn(entry.ids) do
+                    local id = entry.ids[idx].id
+                    if id and id >= 0 then table.insert(idList, "#" .. tostring(id)) end
+                end
+                local summary = entry.name .. (table.getn(idList) > 0 and (" (" .. table.concat(idList, ", ") .. ")") or " (melee)")
+                if ChatFrameEditBox and ChatFrameEditBox:IsVisible() then
+                    ChatFrameEditBox:Insert(summary)
+                elseif DEFAULT_CHAT_FRAME then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffVampify|r " .. summary)
+                end
+            elseif arg1 == "RightButton" and IsAltKeyDown and IsAltKeyDown() then
+                local cfgc = VampifyConfig and VampifyConfig.getChar and VampifyConfig.getChar()
+                if not cfgc or not VampifyConst or not VampifyConst.addNoTrigger then return end
+                local added = 0
+                for idx = 1, table.getn(entry.ids) do
+                    local id = entry.ids[idx].id
+                    if id and id > 0 then
+                        local ok = VampifyConst.addNoTrigger(id, cfgc)
+                        if ok then added = added + 1 end
+                    end
+                end
+                if DEFAULT_CHAT_FRAME then
+                    if added > 0 then
+                        DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffVampify|r excluded " .. entry.name
+                            .. " (" .. added .. " spell id(s)) from future Vampirism tracking.")
+                    else
+                        DEFAULT_CHAT_FRAME:AddMessage("|cff8080ffVampify|r " .. entry.name
+                            .. " cannot be excluded (melee or already excluded).")
+                    end
+                end
+            end
+        end)
         tipRowHovers[i] = h
         return h
     end
@@ -3379,7 +3453,7 @@ if CreateFrame then
         -- same rotation the click itself uses) rather than a fixed two-way phrasing -- with three
         -- scopes now, "for session totals"/"for lifetime totals" stopped being an exhaustive pair.
         local switchHint = " Right-click the bar for " .. V.nextScope(scope) .. " totals."
-        local hoverHint = " Hover a row for details, and the detail panel for more."
+        local hoverHint = " Hover a row for details (Shift-Click: spell ID, Alt+Right-Click: exclude)."
         local noteText
         if n == 0 then
             if scope == "last" then
@@ -3949,6 +4023,22 @@ if CreateFrame then
         -- file's own, gated to at most once a second via V.shouldRepaintPin/lastPinRepaintTime --
         -- the panel is heavier than the compact bar's own segments above and does not need that
         -- throttle's full rate.
+        -- Fade bar out of combat when cfg.fadeOOC is enabled (restores to 1.0 in combat or on hover).
+        local targetAlpha = 1
+        if cfg and cfg.fadeOOC then
+            local inCombat = UnitAffectingCombat and UnitAffectingCombat("player")
+            local hovered = (MouseIsOver and MouseIsOver(frame))
+                or (tip and tip:IsShown())
+                or (detail and detail:IsShown())
+            if not inCombat and not hovered then
+                targetAlpha = 0.35
+            end
+        end
+        if frame.vfLastAlpha ~= targetAlpha then
+            frame.vfLastAlpha = targetAlpha
+            frame:SetAlpha(targetAlpha)
+        end
+
         if tip and tip:IsShown() then
             local now = GetTime()
             if V.shouldRepaintPin(lastPinRepaintTime, now) then
@@ -3971,7 +4061,7 @@ if CreateFrame then
         -- on the FontString itself and needs no help: that FontString was never hidden along with
         -- the bar (only `frame` was), so its rendered text was never stale to begin with. Same for
         -- vfLastPct's own text guard -- only its SHOWN/HIDDEN layout cache needs forcing here.
-        frame.vfLastHeal, frame.vfLastShowBadge, frame.vfLastShowPct, frame.vfLastPillW = nil, nil, nil, nil
+        frame.vfLastHeal, frame.vfLastShowBadge, frame.vfLastShowPct, frame.vfLastPillW, frame.vfLastAlpha = nil, nil, nil, nil, nil
         -- The marker is hidden along with the bar, so an open finding has to be restored with it.
         if warnMsg and warnBtn then warnBtn:Show() end
         V.update()

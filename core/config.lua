@@ -54,6 +54,7 @@ C.DEFAULTS = {
     -- so a hide never survived the next portal. No dbVersion bump needed -- the defaults merge fills
     -- it in recursively, and `true` is what every existing profile was effectively running.
     shown        = true,
+    fadeOOC      = false,
     showOverheal = true,
 
     -- Dev-only per-hit debug export (core/perhit.lua), toggled by /vf perhit on|off and the

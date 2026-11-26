@@ -12,24 +12,49 @@
 VampifyDetect = {}
 local D = VampifyDetect
 
+-- Known Turtle WoW item passive Vampirism spell IDs (1%..5%, from core/const.lua C.SPELL_IDS).
+-- Used by the Nampower fast-path (GetEquippedItems + GetItemStatsField("spellID")) so item-borne
+-- Vampirism is detected immediately and independent of client locale.
+local ITEM_SPELL_PCT = {
+    [45420] = 1,
+    [45421] = 2,
+    [45422] = 3,
+    [45423] = 4,
+    [45424] = 5,
+}
+
 -- Pure: accessors are injected, so this is WoW-free and offline-testable.
-function D.scan(getLink, setTooltip, readLines)
+function D.scan(getLink, setTooltip, readLines, getNampowerSlot)
     local out = {}
     for slot = 1, 19 do
-        local link = getLink(slot)
-        if link then
-            setTooltip(link)
-            local lines = readLines(slot) or {}
-            for i = 1, table.getn(lines) do
-                local text = lines[i]
-                if text then
-                    local low = string.lower(text)
-                    local _, _, pct = string.find(low, "(%d+)%%")
-                    if pct then
-                        if string.find(low, "returned as healing", 1, true) then
-                            table.insert(out, { slot = slot, percent = tonumber(pct), kind = "item" })
-                        elseif string.find(low, "vampirism", 1, true) then
-                            table.insert(out, { slot = slot, percent = tonumber(pct), kind = "enchant" })
+        local npItemPct, hasEnchant
+        if getNampowerSlot then
+            npItemPct, hasEnchant = getNampowerSlot(slot)
+        end
+        if npItemPct and npItemPct > 0 then
+            table.insert(out, { slot = slot, percent = npItemPct, kind = "item" })
+        end
+        -- Skip tooltip scan if Nampower already identified the item's Vampirism spell and the slot
+        -- carries no permanent enchant. Otherwise scan the tooltip (for enchants, unknown spell IDs,
+        -- or when Nampower item stats are unavailable), skipping "item" matches if already recorded.
+        if not (npItemPct and npItemPct > 0 and not hasEnchant) then
+            local link = getLink(slot)
+            if link then
+                setTooltip(link)
+                local lines = readLines(slot) or {}
+                for i = 1, table.getn(lines) do
+                    local text = lines[i]
+                    if text then
+                        local low = string.lower(text)
+                        local _, _, pct = string.find(low, "(%d+)%%")
+                        if pct then
+                            if string.find(low, "returned as healing", 1, true) then
+                                if not (npItemPct and npItemPct > 0) then
+                                    table.insert(out, { slot = slot, percent = tonumber(pct), kind = "item" })
+                                end
+                            elseif string.find(low, "vampirism", 1, true) then
+                                table.insert(out, { slot = slot, percent = tonumber(pct), kind = "enchant" })
+                            end
                         end
                     end
                 end
@@ -104,6 +129,37 @@ local retries = 0
 local function doScan()
     ensureTip()
     emptyScan = false
+    -- Nampower fast-path: snapshot equipped itemIds/enchantIds once per scan (GetEquippedItems
+    -- returns a reusable table, so read values before any other Nampower call).
+    local npEquip = nil
+    if type(GetEquippedItems) == "function" and type(GetItemStatsField) == "function" then
+        local ok, eq = pcall(GetEquippedItems, "player")
+        if ok and type(eq) == "table" then
+            npEquip = {}
+            for s = 1, 19 do
+                local info = eq[s]
+                if info and info.itemId and info.itemId > 0 then
+                    npEquip[s] = {
+                        itemId = info.itemId,
+                        hasEnchant = (info.permanentEnchantId and info.permanentEnchantId > 0) and true or false,
+                    }
+                end
+            end
+        end
+    end
+    local function getNampowerSlot(slot)
+        if not npEquip then return nil, false end
+        local info = npEquip[slot]
+        if not info then return nil, false end
+        local ok, spellIds = pcall(GetItemStatsField, info.itemId, "spellID")
+        if ok and type(spellIds) == "table" then
+            for i = 1, table.getn(spellIds) do
+                local pct = ITEM_SPELL_PCT[spellIds[i]]
+                if pct then return pct, info.hasEnchant end
+            end
+        end
+        return nil, info.hasEnchant
+    end
     local found = D.scan(
         function(slot) return GetInventoryItemLink("player", slot) end,
         function(link)
@@ -118,7 +174,8 @@ local function doScan()
             -- An uncached item renders nothing; SetHyperlink itself asks the server for it.
             if tip:NumLines() == 0 then emptyScan = true end
         end,
-        readLines)
+        readLines,
+        getNampowerSlot)
     if emptyScan then
         -- A slot rendered nothing, so this scan cannot distinguish "no Vampirism" from "item not
         -- cached yet" -- waits of ~25 s have been observed. Retry rather than commit a zero.

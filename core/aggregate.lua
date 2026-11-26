@@ -567,6 +567,7 @@ function A.shares(s, sources, out)
         e.heal = s.fHeal * e.share
     end
     for i = n + 1, table.getn(out) do out[i] = nil end
+    table.setn(out, n)
     return out
 end
 

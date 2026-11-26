@@ -30,7 +30,8 @@ if CreateFrame then
     -- -- refreshSliders() below needs to push their persisted values in on OnShow, same as
     -- sliderFont/sliderRise already do.
     local swatch, btnMove, btnPosReset, posLabel, sliderFont, sliderRise, btnDemo, btnOutline,
-        sliderPillH, sliderPanelBarH, sliderDuration
+        cbShadow, sliderPillH, sliderPanelBarH, sliderDuration
+    local suppressingSliders = false
 
     local function db() return VampifyConfig.get() end
 
@@ -179,8 +180,12 @@ if CreateFrame then
         if flag == "upper" or flag == "uncertain" then
             table.insert(infoLines, "|cffe0c98aUpper bound: no SPELL_GO seen, AoE damping not applied.|r")
         end
-        if not VampifyDamage.damageSeen() then
-            table.insert(infoLines, "|cffd05252No damage events received - nampower may be absent.|r")
+        local hasNp, npVer = VampifyDamage.hasNampower and VampifyDamage.hasNampower()
+        if not hasNp then
+            table.insert(infoLines, "|cffd05252Nampower is NOT detected - outgoing damage events require nampower.|r")
+        elseif not VampifyDamage.damageSeen() then
+            table.insert(infoLines, "|cffe0c98aNampower v" .. (npVer or "detected")
+                .. " active - waiting for first own-damage event.|r")
         end
 
         return table.concat(infoLines, "\n")
@@ -254,12 +259,22 @@ if CreateFrame then
         -- FontStrings only (gui/sct.lua's S.spawn reads sct.duration into s.dur).
         W.SetSliderEnabled(sliderDuration, ownSctEnabled)
         if btnDemo then W.SetButtonEnabled(btnDemo, ownSctEnabled) end
-        -- The outline shapes OUR numbers only; Blizzard's engine draws its own.
+        -- The outline and shadow shape OUR numbers only; Blizzard's engine draws its own.
         if btnOutline then W.SetButtonEnabled(btnOutline, ownSctEnabled) end
+        if cbShadow then
+            if ownSctEnabled then
+                cbShadow:Enable()
+                if cbShadow.vfLabelFS then W.SetTextColorG(cbShadow.vfLabelFS, C.ink) end
+            else
+                cbShadow:Disable()
+                if cbShadow.vfLabelFS then W.SetTextColorG(cbShadow.vfLabelFS, C.faint) end
+            end
+        end
     end
 
     -- Push stored values into the sliders without letting OnValueChanged write them straight back.
     local function refreshSliders()
+        suppressingSliders = true
         if sliderFont then
             local v = sliderFont.vfGetter()
             sliderFont:SetValue(v)
@@ -286,6 +301,7 @@ if CreateFrame then
             getglobal("VampifyOptionsDurationSliderText"):SetText(
                 sliderDuration.vfLabel .. ": " .. string.format(sliderDuration.vfFmt or "%s", v))
         end
+        suppressingSliders = false
     end
 
     -- ------------------------------------------------------------------
@@ -344,6 +360,16 @@ if CreateFrame then
             end)
         place(cbShow, -26)
         W.AttachTooltip(cbShow, "Same as left-clicking the minimap button.")
+
+        local cbFadeOOC = CreateCheckbox(f, "Fade bar out of combat",
+            function() local cfg = db(); return cfg and cfg.fadeOOC end,
+            function(v)
+                local cfg = db()
+                if cfg then cfg.fadeOOC = v end
+                if VampifyDisplay and VampifyDisplay.update then VampifyDisplay.update() end
+            end)
+        place(cbFadeOOC, -26)
+        W.AttachTooltip(cbFadeOOC, "Dims the compact bar to 35% opacity while out of combat (restores to 100% on hover or in combat).")
 
         local cbLock = CreateCheckbox(f, "Lock display",
             function() local cfg = db(); return cfg and cfg.locked end,
@@ -632,6 +658,7 @@ if CreateFrame then
             sl.vfStep = step
             sl.vfFmt = fmt
             sl:SetScript("OnValueChanged", function()
+                if suppressingSliders then return end
                 local v = this:GetValue()
                 -- OptionsSliderTemplate does not quantise for us in 1.12; round to the slider's own
                 -- step by hand. math.floor(v/step+0.5)*step generalises the old "nearest integer"
@@ -729,7 +756,7 @@ if CreateFrame then
         -- it off (a missing/unmigrated key must not read as off). applyFont() re-stamps every
         -- pooled FontString immediately, same as the outline cycle button above -- otherwise
         -- already-spawned slots would keep the old shadow state until the pool cycled.
-        local cbShadow = CreateCheckbox(f, "Text shadow",
+        cbShadow = CreateCheckbox(f, "Text shadow",
             function()
                 local cfg = db()
                 local sct = cfg and cfg.sct
